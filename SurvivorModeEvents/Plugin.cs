@@ -87,6 +87,13 @@ public class Plugin : RogueGenesiaMod
 
     public override void OnRegisterModdedContent()
     {
+        // ModGenesia re-runs the mod lifecycle in-process when the user toggles a mod
+        // on/off in the mod manager — statics are NOT reset between those passes. A
+        // cached discovery from before another event-providing mod was toggled on
+        // would miss that mod's events. Drop the cache so we always re-scan when the
+        // option UI is being rebuilt.
+        _allEvents = null;
+
         RegisterIntervalSlider();
 
         var entries = AllEvents; // triggers discovery + log

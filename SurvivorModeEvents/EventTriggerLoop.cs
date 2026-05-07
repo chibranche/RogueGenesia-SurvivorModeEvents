@@ -39,7 +39,11 @@ public static class EventTriggerLoop
         float now = gms.SurvivorsModeTiming;
 
         if (SurvivorEventInProgress) return;
-        if (GameData.ReachedInfinity) return;
+        // Overdrive guard: ReachedRedTimer flips when survival time crosses the
+        // difficulty's Duration (final boss defeated, timer goes red), and stays true
+        // through the eventual ReachedInfinity (7-day) phase. Cuts off both states
+        // with one check.
+        if (gms.ReachedRedTimer || GameData.ReachedInfinity) return;
         if (gms.SelectingArtifact) return;
         // Don't trigger during the death sequence: SurvivorsModeTiming freezes when the
         // player is dead, so `now - _lastTriggerTime` could already be over the threshold,
