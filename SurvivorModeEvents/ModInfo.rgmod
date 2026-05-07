@@ -1,0 +1,15 @@
+{
+  "Name": "SurvivorModeEvents",
+  "Author": "chibranche",
+  "Version": "0.1.0",
+  "WorkshopID": "",
+  "DisplayedName": [
+    { "Key": "en", "Value": "Survivor Mode Events" }
+  ],
+  "DisplayedDescription": [
+    { "Key": "en", "Value": "Triggers Rog mode events at a configurable interval (1-60 minutes) during Survivor mode runs. Each event has its own toggle. Events do not trigger during Overdrive (post-final-boss). Game pauses while the event is open." }
+  ],
+  "HardDependencies": [],
+  "SoftDependencies": [],
+  "Tags": []
+}

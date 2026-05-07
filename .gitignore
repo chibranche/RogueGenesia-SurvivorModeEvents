@@ -1,0 +1,28 @@
+# Build outputs
+bin/
+obj/
+
+# Visual Studio user-specific files
+.vs/
+*.user
+*.suo
+*.userprefs
+
+# Build configurations and IDE state
+[Dd]ebug/
+[Rr]elease/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Rider / VS Code
+.idea/
+.vscode/
+
+# Backup / source-art files
+*.original.*
+*.psd
+*.kra
+*.xcf

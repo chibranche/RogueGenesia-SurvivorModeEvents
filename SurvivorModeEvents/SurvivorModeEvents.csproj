@@ -1,0 +1,62 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+
+    <RogueGenesiaManaged Condition="'$(RogueGenesiaManaged)' == ''">E:\SteamLibrary\steamapps\common\Rogue Genesia\Modded\Rogue Genesia_Data\Managed</RogueGenesiaManaged>
+    <ModInstallFolder Condition="'$(ModInstallFolder)' == ''">$(RogueGenesiaManaged)\..\..\Mods\SurvivorModeEvents</ModInstallFolder>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Lib.Harmony" Version="2.3.3" GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="ModGenesia">
+      <HintPath>$(RogueGenesiaManaged)\ModGenesia.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="RogueGenesia">
+      <HintPath>$(RogueGenesiaManaged)\RogueGenesia.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(RogueGenesiaManaged)\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(RogueGenesiaManaged)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="ModInfo.rgmod">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="ModPreview.png" Condition="Exists('ModPreview.png')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="ModIcon.png" Condition="Exists('ModIcon.png')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <Target Name="InstallMod" AfterTargets="Build">
+    <MakeDir Directories="$(ModInstallFolder)" />
+    <ItemGroup>
+      <ModFiles Include="$(OutputPath)\SurvivorModeEvents.dll" />
+      <ModFiles Include="$(OutputPath)\SurvivorModeEvents.pdb" Condition="Exists('$(OutputPath)\SurvivorModeEvents.pdb')" />
+      <ModFiles Include="$(OutputPath)\ModInfo.rgmod" />
+      <ModFiles Include="$(OutputPath)\ModPreview.png" Condition="Exists('$(OutputPath)\ModPreview.png')" />
+      <ModFiles Include="$(OutputPath)\ModIcon.png" Condition="Exists('$(OutputPath)\ModIcon.png')" />
+      <ModFiles Include="$(PkgLib_Harmony)\lib\net472\0Harmony.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ModFiles)" DestinationFolder="$(ModInstallFolder)" SkipUnchangedFiles="true" />
+    <Message Text="Installed mod files to $(ModInstallFolder)" Importance="high" />
+  </Target>
+
+</Project>
