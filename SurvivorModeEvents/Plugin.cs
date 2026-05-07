@@ -22,63 +22,54 @@ public class Plugin : RogueGenesiaMod
     /// <summary>
     /// One entry per event the mod can fire in Survivor mode. Display name is what the
     /// player sees on the toggle, EventType is the EventRogue subclass we instantiate
-    /// when the event triggers.
+    /// when the event triggers, Category drives the default-on/off behaviour.
     /// </summary>
     public sealed class EventEntry
     {
         public string DisplayName;
         public Type EventType;
+        public EventCategory Category;
     }
 
-    // (display name, type name). Resolved at first access via reflection so a vanilla
-    // class rename only loses that one event with a logged warning instead of refusing
-    // to load the whole mod (which is what happens when typeof(...) fails at JIT time).
-    // LegacyEvent intentionally not listed: vanilla GetChanceToGetEvent returns 0f and
-    // its OnLevelLoaded computes m_experienceReward via Math.Floor(...) without
-    // assigning — looks like dev code abandoned mid-edit.
-    private static readonly (string DisplayName, string TypeName)[] EventDescriptors =
-    {
-        ("Banker",                    "BankerEvent"),
-        ("Bard",                      "BardEvent"),
-        ("Bonfire",                   "BonFireEvent"),
-        ("Gambling",                  "GamblingMoney_Event"),
-        ("God Statuette",             "GodStatuetteEvent"),
-        ("God Stele",                 "GodStelleEvent"),
-        ("Golden Altar",              "GoldenAltarEvent"),
-        ("Jaald Temple",              "JaaldTempleEvent"),
-        ("Priest",                    "PriestEvent"),
-        ("Rogue Goblin",              "RogueGoblinEvent"),
-        ("Shopkeeper Investment",     "ShopKeeperInvestmentEvent"),
-        ("Shrine of Balance",         "ShrineOfBalance"),
-        ("Shrine of Disorder",        "ShrineOfDisorder"),
-        ("Shrine of Elemental Order", "ShrineOfElementalOrder"),
-        ("Shrine of Order",           "ShrineOfOrder"),
-        ("Shrine of Reconstruction",  "ShrineOfReconstruction"),
-        ("Soul Forge",                "SoulForgeEvent"),
-        ("Trainer",                   "TrainerEvent"),
-        ("Wandering Caravan",         "WanderingCaravanEvent"),
-    };
-
-    private const string EventTypeNamespace = "RogueGenesia.Data";
-
     private static EventEntry[] _allEvents;
-    public static EventEntry[] AllEvents => _allEvents ??= ResolveEvents();
 
-    private static EventEntry[] ResolveEvents()
+    /// <summary>
+    /// All events offered as toggles. Built once at first access via reflection scan
+    /// over loaded assemblies (so modded events join automatically) plus a static
+    /// safety probe (so events that look unsafe never appear).
+    /// </summary>
+    public static EventEntry[] AllEvents => _allEvents ??= DiscoverAndLog();
+
+    private static EventEntry[] DiscoverAndLog()
     {
-        var asm = typeof(EventRogue).Assembly;
-        var resolved = new List<EventEntry>(EventDescriptors.Length);
-        foreach (var (display, typeName) in EventDescriptors)
+        var report = EventClassifier.DiscoverAndClassify();
+
+        int safe = 0, vanillaUnknown = 0, modded = 0;
+        foreach (var e in report.Entries)
         {
-            var type = asm.GetType(EventTypeNamespace + "." + typeName);
-            if (type == null || !typeof(EventRogue).IsAssignableFrom(type))
+            switch (e.Category)
             {
-                Debug.LogWarning($"[SurvivorModeEvents] Event type '{typeName}' not found or not an EventRogue — skipping. Game update may have renamed/removed it.");
-                continue;
+                case EventCategory.VanillaSafe:    safe++; break;
+                case EventCategory.VanillaUnknown: vanillaUnknown++; break;
+                case EventCategory.Modded:         modded++; break;
             }
-            resolved.Add(new EventEntry { DisplayName = display, EventType = type });
         }
-        return resolved.ToArray();
+
+        Debug.Log($"[SurvivorModeEvents] Event discovery: {safe} vanilla-safe (default ON), " +
+                  $"{vanillaUnknown} new vanilla (default OFF), {modded} modded (default OFF), " +
+                  $"{report.Blocked.Count} blocklisted, {report.ProbeFailed.Count} probe-failed");
+
+        foreach (var (typeName, reason) in report.Blocked)
+            Debug.Log($"[SurvivorModeEvents]   blocked: {typeName} — {reason}");
+        foreach (var (typeName, reason) in report.ProbeFailed)
+            Debug.LogWarning($"[SurvivorModeEvents]   rejected: {typeName} — {reason}");
+        foreach (var entry in report.Entries)
+        {
+            if (entry.Category == EventCategory.Modded || entry.Category == EventCategory.VanillaUnknown)
+                Debug.Log($"[SurvivorModeEvents]   discovered ({entry.Category}): {entry.EventType.FullName}");
+        }
+
+        return report.Entries.ToArray();
     }
 
     public override void OnModLoaded(ModData modData)
@@ -97,27 +88,34 @@ public class Plugin : RogueGenesiaMod
     public override void OnRegisterModdedContent()
     {
         RegisterIntervalSlider();
-        foreach (var entry in AllEvents)
+
+        var entries = AllEvents; // triggers discovery + log
+        foreach (var entry in entries)
         {
             RegisterEventToggle(entry);
         }
 
-        // OptionData is constructed before mods load, so our keys aren't in its
-        // dicts even though the modded options exist. Seed defaults for any keys
-        // that haven't been written by previous saves so the menu UI and our
-        // runtime reads see the right state.
+        // Wildcard OnLevelLoaded finalizer over *all* EventRogue subclasses (primary
+        // events AND sub-events reachable via EventManager.SetEvent — e.g. the bard's
+        // ShareTalesToBard / ListenToBard). If anything throws during setup while our
+        // flow is driving, abort cleanly instead of leaving the player stuck.
+        ApplyOnLevelLoadedFinalizer();
+
+        // OptionData is constructed before mods load, so our keys aren't in its dicts
+        // even though the modded options exist. Seed defaults for any keys that haven't
+        // been written by previous saves.
         if (GameData.OptionData != null)
         {
             if (!GameData.OptionData.HasValue(IntervalOptionId))
             {
                 GameData.OptionData.SetValueFloat(IntervalOptionId, DefaultIntervalMinutes);
             }
-            foreach (var entry in AllEvents)
+            foreach (var entry in entries)
             {
                 string key = OptionIdForEvent(entry);
                 if (!GameData.OptionData.HasValue(key))
                 {
-                    GameData.OptionData.SetValueInt(key, 1); // default ON
+                    GameData.OptionData.SetValueInt(key, DefaultEnabledFor(entry) ? 1 : 0);
                 }
             }
         }
@@ -132,6 +130,40 @@ public class Plugin : RogueGenesiaMod
         }
     }
 
+    private static void ApplyOnLevelLoadedFinalizer()
+    {
+        var finalizerMethod = AccessTools.Method(typeof(OnLevelLoadedFinalizer), nameof(OnLevelLoadedFinalizer.Finalizer));
+        if (finalizerMethod == null)
+        {
+            Debug.LogError("[SurvivorModeEvents] Could not resolve OnLevelLoadedFinalizer.Finalizer — wildcard guard disabled");
+            return;
+        }
+        var hmFinalizer = new HarmonyMethod(finalizerMethod);
+
+        int patched = 0;
+        foreach (var type in EventClassifier.AllEventRogueSubclassesWithOwnOnLevelLoaded())
+        {
+            if (EventClassifier.HasSpecificFinalizer(type)) continue;
+
+            var target = AccessTools.DeclaredMethod(type, "OnLevelLoaded");
+            if (target == null) continue;
+
+            try
+            {
+                _harmony.Patch(target, finalizer: hmFinalizer);
+                patched++;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[SurvivorModeEvents] Failed to apply wildcard finalizer to {type.FullName}: {e.Message}");
+            }
+        }
+        Debug.Log($"[SurvivorModeEvents] Wildcard OnLevelLoaded finalizer applied to {patched} event types");
+    }
+
+    private static bool DefaultEnabledFor(EventEntry entry) =>
+        entry.Category == EventCategory.VanillaSafe;
+
     public static string OptionIdForEvent(EventEntry entry) => "sme_event_" + entry.EventType.Name;
 
     public static float GetIntervalMinutes()
@@ -144,12 +176,12 @@ public class Plugin : RogueGenesiaMod
 
     public static bool IsEventEnabled(EventEntry entry)
     {
-        if (GameData.OptionData == null) return true;
+        // Pre-OptionData fallback (e.g. we're queried before OnRegisterModdedContent) —
+        // and post-seed fallback if a key somehow isn't in the dict — both fall through
+        // to the entry's category-default so unknown/modded events stay opt-in.
+        if (GameData.OptionData == null) return DefaultEnabledFor(entry);
         string key = OptionIdForEvent(entry);
-        // Defensive: if the key isn't in the dict (e.g. on first launch before
-        // OnRegisterModdedContent has run, or if seeding failed) treat it as ON
-        // since true is the default.
-        if (!GameData.OptionData.HasValue(key)) return true;
+        if (!GameData.OptionData.HasValue(key)) return DefaultEnabledFor(entry);
         return GameData.OptionData.GetValueInt(key) >= 1;
     }
 
@@ -186,16 +218,27 @@ public class Plugin : RogueGenesiaMod
     private static void RegisterEventToggle(EventEntry entry)
     {
         var name = LocList(entry.DisplayName);
-        var tooltip = LocList("Allow the " + entry.DisplayName + " event to trigger in Survivor mode.");
+        var tooltip = LocList(BuildTooltip(entry));
 
         var toggle = ModOption.MakeToggleOption(
             name: OptionIdForEvent(entry),
             LocalisedName: name,
-            defaultValue: true,
+            defaultValue: DefaultEnabledFor(entry),
             LocalisedTooltip: tooltip);
 
         ModOption.AddModOption(toggle, OptionsTab, OptionsTab);
     }
+
+    private static string BuildTooltip(EventEntry entry) => entry.Category switch
+    {
+        EventCategory.VanillaSafe =>
+            $"Allow the {entry.DisplayName} event to trigger in Survivor mode.",
+        EventCategory.VanillaUnknown =>
+            $"Allow {entry.EventType.Name} (a vanilla event our compatibility list doesn't recognize yet) to trigger in Survivor mode. Default off — enable at your own risk.",
+        EventCategory.Modded =>
+            $"Allow {entry.EventType.Name} (a modded event from {entry.EventType.Assembly.GetName().Name}) to trigger in Survivor mode. Default off — enable at your own risk.",
+        _ => $"Allow {entry.EventType.Name} to trigger in Survivor mode.",
+    };
 
     private static LocalizationDataList LocList(string englishValue)
     {

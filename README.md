@@ -3,10 +3,12 @@
 A mod that triggers Rog mode events at a configurable interval during Survivor mode runs.
 
 - **Adjustable interval** (1 to 60 minutes, default 5).
-- **Per-event toggle** for all 20 supported events — enable only the ones you want.
+- **Per-event toggle** — enable only the ones you want.
 - **Auto-pause** while the event is open, so you can read and choose without dying.
 - **Skipped during Overdrive** — no events fire after the final boss is killed and
   the timer goes wild.
+- **Modded events auto-detected** — events from other mods are discovered at startup,
+  filtered through a safety probe, and offered as opt-in toggles (default off).
 
 ## Settings
 
@@ -15,22 +17,56 @@ A new **Survivor Mode Events** tab is added to the in-game options menu:
 | Setting | Range | Default |
 |---|---|---|
 | Event Interval (minutes) | 1 → 60 | **5** |
-| ...and 20 toggles, one per event | on/off | all **on** |
+| 19 vanilla event toggles | on/off | all **on** |
+| Modded / unknown event toggles | on/off | all **off** (opt-in) |
 
-## Supported events
+## Supported vanilla events
 
-Only events that have no Rog-mode-specific dependencies (no stage map, no scene
-transition, no combat node load) are included. Each one is purely persistent-data
-or in-event — safe to fire mid-run:
+Hand-curated as safe in Survivor mode (no stage map, no scene transition, no combat
+node load). Each one is purely persistent-data or in-event — safe to fire mid-run:
 
 Banker · Bard · Bonfire · Gambling · God Statuette · God Stele · Golden Altar ·
-Jaald Temple · Legacy · Priest · Rogue Goblin · Shopkeeper Investment ·
+Jaald Temple · Priest · Rogue Goblin · Shopkeeper Investment ·
 Shrine of Balance / Disorder / Elemental Order / Order / Reconstruction ·
 Soul Forge · Trainer · Wandering Caravan
 
-Combat-style events (Magic Mirror, Notice Board challenges, Save Villagers'
-fight branch) are intentionally excluded — they would terminate the current
-Survivor run by loading a separate combat scene.
+Combat-style events (Magic Mirror, all Notice Board variants, Save Villagers, plus any
+modded events) are auto-blocked via the vanilla `ICombatEvent` marker interface — they
+would terminate the run by loading a separate battle scene. A small extra hand-list
+catches the remaining non-combat broken/placeholder events (Crystal Mine, Default,
+Legacy).
+
+## Modded events
+
+Events from other mods are picked up automatically at startup, as long as the mod
+registers them via the vanilla `EventManager.RegisterEvent(...)` call (the same path
+vanilla uses for its own events). Sub-events that aren't registered as primary
+triggerables are skipped, so the settings UI doesn't show internal branch classes.
+
+Each candidate goes through a safety probe before getting a toggle:
+
+1. **Constructor check** — `Activator.CreateInstance` must succeed.
+2. **IL scan of `OnLevelLoaded` / `NextAnswer`** — if the method directly calls
+   `SceneManager.LoadScene` / `LoadSceneAsync` for any scene other than the additive
+   `Event` scene, the event is rejected as combat-style. (Events that use the normal
+   `EventManager.NextStage` flow are fine — we patch that path.)
+
+Events that pass the probe are offered as toggles labelled `[Modded] <ClassName>` (or
+`[New] <ClassName>` for unrecognized vanilla events that may have been added in a game
+update). They default to **off** so you opt in explicitly.
+
+Even after passing the probe, a wildcard Harmony finalizer wraps every offered event's
+`OnLevelLoaded`. If a modded event's setup throws at runtime while we're driving the
+flow, the finalizer logs the error and aborts the event cleanly instead of leaving the
+player stuck.
+
+**Limitations** — the IL scan only inspects top-level instructions of `OnLevelLoaded`
+and `NextAnswer`. A modded event that hides its scene load behind a helper method, or
+loads a scene by build-index instead of by name, will pass the probe but may still
+break the run. Disable the toggle if you observe issues.
+
+The startup log (`Player.log`) prints a discovery summary (`safe / new / modded /
+blocked / probe-failed`) and the reason for each rejection.
 
 ## How it works
 
@@ -97,9 +133,10 @@ the mod from the in-game mod manager.
 SurvivorModeEvents.sln
 SurvivorModeEvents/
 ├── SurvivorModeEvents.csproj   Project + auto-install build target
-├── Plugin.cs                    Mod entry, option registration, event whitelist
+├── Plugin.cs                    Mod entry, option registration, wildcard finalizer wiring
+├── EventDiscovery.cs            Reflection scan, vanilla safelist/blocklist, IL safety probe
 ├── EventTriggerLoop.cs          Timer + scene load/unload logic
-├── Patches.cs                   Harmony patches (Survival.Update, Survival.Start, EventManager.Next_Stage_Confirm)
+├── Patches.cs                   Harmony patches (Survival.Update/Start/OnPlayerDeath, EventManager.NextStage*, BlackFader/WhiteFader.Awake, BankerEvent recovery)
 └── ModInfo.rgmod                Mod metadata read by the game
 ```
 
@@ -107,8 +144,3 @@ SurvivorModeEvents/
 
 - **Same event back-to-back**: the random pick is uniform with no anti-repeat — you
   may occasionally see the same event fire two intervals in a row.
-- **Visual layering**: the Event UI is drawn over the still-frozen Survivor scene.
-  Functional but not pretty; iterate on this if it bothers you.
-- **Pause interactions**: pressing Esc while an event is open hits the vanilla
-  EventManager pause handler, which may behave unexpectedly combined with our
-  forced `timeScale = 0`. Don't pause inside an event.

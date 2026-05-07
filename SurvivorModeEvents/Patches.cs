@@ -122,6 +122,62 @@ public static class EventManagerNextStagePatch
 }
 
 /// <summary>
+/// <see cref="WanderingCaravanEvent"/>'s Trade and BlackMarket choices call
+/// <c>LoadShopStage</c>, which does a single-mode <c>SceneManager.LoadSceneAsync</c>
+/// for the Shop scene — that would replace the still-loaded Survivor scene and end
+/// the run. There's no good way to additively load the vanilla Shop without
+/// patching its own exit flow too, so we strip the two shop-loading choices in
+/// survivor mode. The remaining options (Steal if Corruption ≥ 20, Ignore) are
+/// fully in-event and work normally.
+/// </summary>
+[HarmonyPatch(typeof(WanderingCaravanEvent), nameof(WanderingCaravanEvent.OnLevelLoaded))]
+public static class WanderingCaravanRemoveShopChoicesPatch
+{
+    public static void Postfix(WanderingCaravanEvent __instance)
+    {
+        if (!EventTriggerLoop.SurvivorEventInProgress) return;
+
+        try
+        {
+            object choices = Traverse.Create(__instance).Field("saveVillagerChoices").GetValue();
+            if (choices == null) return;
+
+            var listType = choices.GetType();
+            var enumType = listType.GetGenericArguments()[0];
+            var remove = listType.GetMethod("Remove");
+            // ESaveVillagerChoice.Trade and .BlackMarket — defined in WanderingCaravanEvent.
+            remove.Invoke(choices, new[] { Enum.Parse(enumType, "Trade") });
+            remove.Invoke(choices, new[] { Enum.Parse(enumType, "BlackMarket") });
+        }
+        catch (Exception e)
+        {
+            Debug.LogError("[SurvivorModeEvents] WanderingCaravan choice trim failed: " + e);
+        }
+    }
+}
+
+/// <summary>
+/// <see cref="ShareTalesToBard.GetWorldScore"/> casts <c>ActiveDifficulty as RogueModeDifficultySO</c>
+/// and dereferences <c>.RogueZoneList</c> — NPE in Survivor mode where the difficulty is
+/// a <c>SurvivorsModeDifficultySO</c>. The score is read from a dictionary initializer
+/// inside <c>OnLevelLoaded</c>, so the whole bard "tell tales" sub-event blows up before
+/// any UI is shown. Returning 0 in survivor mode plays nicely with vanilla's own gating
+/// logic (each tale category is only shown if its score is &gt; 0), so the WorldScore
+/// option silently drops out and the other four tale categories work normally.
+/// </summary>
+[HarmonyPatch(typeof(ShareTalesToBard), "GetWorldScore")]
+public static class ShareTalesToBardGetWorldScorePatch
+{
+    public static Exception Finalizer(Exception __exception, ref double __result)
+    {
+        if (__exception == null) return null;
+        if (!EventTriggerLoop.SurvivorEventInProgress) return __exception;
+        __result = 0.0;
+        return null; // swallow
+    }
+}
+
+/// <summary>
 /// Vanilla <see cref="BankerEvent.OnLevelLoaded"/> casts <c>ActiveDifficulty</c> to
 /// <c>RogueModeDifficultySO</c> and then dereferences it on the next line — fine in Rog
 /// mode, NPE in Survivor mode (where the difficulty is a <c>SurvivorsModeDifficultySO</c>).
